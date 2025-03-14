@@ -1,2 +1,4 @@
+postgres:
+    port: "8083"
 project:
     name: 1-music-streaming
