@@ -28,7 +28,6 @@ env/
 ENV/
 .env
 .venv/
-.python-version
 
 # IDE
 .idea/
@@ -43,7 +42,6 @@ ENV/
 
 # Jupyter Notebook
 .ipynb_checkpoints
-*.ipynb
 
 # Testing
 .coverage
@@ -66,10 +64,7 @@ logs/
 unittests.cfg
 webserver_config.py
 
-# Data files
-data/**/*.csv
-data/**/*.parquet
-data/**/*.json
+
 
 # Environment files
 .env
@@ -95,15 +90,15 @@ Thumbs.db
 *.temp
 
 # Project specific
-redshift_data/
-postgres_data/
-redis_data/
+# redshift_data/
+# postgres_data/
+# redis_data/
 
-# Documentation builds
-docs/_build/
-docs/_static/
-docs/_templates/
-site/
+# # Documentation builds
+# docs/_build/
+# docs/_static/
+# docs/_templates/
+# site/
 
 # mypy
 .mypy_cache/
@@ -121,3 +116,7 @@ dmypy.json
 *.crt
 *.password
 *.secret
+
+.qodo
+
+.astro
