@@ -1,0 +1,6 @@
+postgres:
+    port: "5434"
+project:
+    name: 1-music-streaming-lab
+webserver:
+    port: "8082"
