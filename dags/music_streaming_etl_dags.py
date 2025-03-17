@@ -1,3 +1,24 @@
+"""
+ETL DAG for Music Streaming Data Processing
+
+This module implements an Apache Airflow DAG that performs ETL operations on music streaming data.
+It extracts data from RDS (users and songs) and S3 (streaming data), validates the data,
+computes various KPIs, and loads the results into Redshift.
+
+The DAG performs the following main steps:
+1. Extracts user and song data from RDS
+2. Extracts streaming data from S3
+3. Validates extracted data
+4. Computes genre and hourly KPIs
+5. Validates computed KPIs
+6. Tests Redshift connection and creates tables
+7. Uploads KPIs to S3
+8. Loads KPIs into Redshift
+
+Author: Data Engineering Team
+Last Modified: 2025-03-17
+"""
+
 from airflow import DAG
 from airflow.providers.amazon.aws.hooks.redshift_sql import RedshiftSQLHook
 from airflow.providers.amazon.aws.hooks.s3 import S3Hook
@@ -10,12 +31,55 @@ import pandas as pd
 import io
 import logging
 
-# Constants
+# Connection Constants
 S3_CONN_ID = "aws_s3_conn"
 RDS_CONN_ID = "rds_conn"
 REDSHIFT_CONN_ID = "redshift_conn"
 S3_BUCKET = "music-streaming-lab"
 S3_KEYS = ["streams1.csv", "streams2.csv", "streams3.csv"]
+
+# File Path Constants
+TMP_USERS_PATH = "/tmp/users.csv"
+TMP_SONGS_PATH = "/tmp/songs.csv"
+TMP_STREAMING_PATH = "/tmp/streaming_data.csv"
+TMP_GENRE_KPIS_PATH = "/tmp/genre_kpis.csv"
+TMP_HOURLY_KPIS_PATH = "/tmp/hourly_kpis.csv"
+
+# Table Names
+USERS_TABLE = "users"
+SONGS_TABLE = "songs"
+GENRE_KPIS_TABLE = "genre_kpis"
+HOURLY_KPIS_TABLE = "hourly_kpis"
+
+# SQL Queries
+USERS_QUERY = """
+    SELECT *
+    FROM users;
+"""
+
+SONGS_QUERY = """
+    SELECT *
+    FROM songs;
+"""
+
+USERS_VALIDATION_QUERY = """
+    SELECT
+        COUNT(*) as total_rows,
+        COUNT(CASE WHEN user_id IS NULL THEN 1 END) as null_user_ids,
+        COUNT(CASE WHEN user_name IS NULL THEN 1 END) as null_usernames,
+        COUNT(CASE WHEN user_country IS NULL THEN 1 END) as null_countries
+    FROM users;
+"""
+
+SONGS_VALIDATION_QUERY = """
+    SELECT
+        COUNT(*) as total_rows,
+        COUNT(CASE WHEN track_id IS NULL THEN 1 END) as null_track_ids,
+        COUNT(CASE WHEN track_name IS NULL THEN 1 END) as null_track_names
+    FROM songs;
+"""
+
+# Redshift COPY Options
 COPY_OPTIONS = [
     "CSV",
     "IGNOREHEADER 1",
@@ -29,19 +93,22 @@ COPY_OPTIONS = [
 
 
 # Define all functions first
-def extract_rds_data():
+def extract_rds_data() -> None:
+    """Extract user and song data from RDS and save to CSV files."""
     rds_hook = PostgresHook(postgres_conn_id=RDS_CONN_ID)
-    users_df = rds_hook.get_pandas_df(
-        "SELECT user_id, user_name, user_age, user_country, created_at FROM users;"
-    )
-    songs_df = rds_hook.get_pandas_df(
-        "SELECT track_id, artists, album_name, track_name, popularity, duration_ms, track_genre FROM songs;"
-    )
-    users_df.to_csv("/tmp/users.csv", index=False)
-    songs_df.to_csv("/tmp/songs.csv", index=False)
+    users_df = rds_hook.get_pandas_df(USERS_QUERY)
+    songs_df = rds_hook.get_pandas_df(SONGS_QUERY)
+    users_df.to_csv(TMP_USERS_PATH, index=False)
+    songs_df.to_csv(TMP_SONGS_PATH, index=False)
 
 
-def extract_s3_data():
+def extract_s3_data() -> None:
+    """
+    Extract streaming data from S3 and combine into a single CSV file.
+
+    Downloads multiple streaming data files from S3, combines them into a single
+    DataFrame, and saves to a temporary CSV file.
+    """
     s3_hook = S3Hook(aws_conn_id=S3_CONN_ID)
     dataframes = []
     for key in S3_KEYS:
@@ -51,23 +118,16 @@ def extract_s3_data():
             pd.read_csv(io.BytesIO(file_content), parse_dates=["listen_time"])
         )
     streaming_df = pd.concat(dataframes, ignore_index=True)
-    streaming_df.to_csv("/tmp/streaming_data.csv", index=False)
+    streaming_df.to_csv(TMP_STREAMING_PATH, index=False)
 
 
-def validate_data(**context):
+def validate_data() -> bool:
     """Validate data quality after extraction"""
     try:
         rds_hook = PostgresHook(postgres_conn_id=RDS_CONN_ID)
 
         # Check users table
-        users_validation = rds_hook.get_records("""
-            SELECT 
-                COUNT(*) as total_rows,
-                COUNT(CASE WHEN user_id IS NULL THEN 1 END) as null_user_ids,
-                COUNT(CASE WHEN user_name IS NULL THEN 1 END) as null_usernames,
-                COUNT(CASE WHEN user_country IS NULL THEN 1 END) as null_countries
-            FROM users;
-        """)
+        users_validation = rds_hook.get_records(USERS_VALIDATION_QUERY)
 
         if users_validation[0][0] == 0:
             raise ValueError("Users table is empty")
@@ -78,13 +138,7 @@ def validate_data(**context):
             )
 
         # Check songs table
-        songs_validation = rds_hook.get_records("""
-            SELECT 
-                COUNT(*) as total_rows,
-                COUNT(CASE WHEN track_id IS NULL THEN 1 END) as null_track_ids,
-                COUNT(CASE WHEN track_name IS NULL THEN 1 END) as null_track_names
-            FROM songs;
-        """)
+        songs_validation = rds_hook.get_records(SONGS_VALIDATION_QUERY)
 
         if songs_validation[0][0] == 0:
             raise ValueError("Songs table is empty")
@@ -95,7 +149,7 @@ def validate_data(**context):
             )
 
         # Validate S3 data
-        streaming_df = pd.read_csv("/tmp/streaming_data.csv")
+        streaming_df = pd.read_csv(TMP_STREAMING_PATH)
         if streaming_df.empty:
             raise ValueError("No streaming data found in extracted S3 files")
 
@@ -115,10 +169,11 @@ def validate_data(**context):
         raise
 
 
-def compute_kpis():
-    users_df = pd.read_csv("/tmp/users.csv")
-    songs_df = pd.read_csv("/tmp/songs.csv")
-    streaming_df = pd.read_csv("/tmp/streaming_data.csv", parse_dates=["listen_time"])
+def compute_kpis() -> None:
+    """Compute genre and hourly KPIs from extracted data."""
+    users_df = pd.read_csv(TMP_USERS_PATH)
+    songs_df = pd.read_csv(TMP_SONGS_PATH)
+    streaming_df = pd.read_csv(TMP_STREAMING_PATH, parse_dates=["listen_time"])
 
     merged_df = streaming_df.merge(songs_df, on="track_id", how="left")
     merged_df = merged_df.merge(users_df, on="user_id", how="left")
@@ -147,15 +202,15 @@ def compute_kpis():
         .reset_index()
     )
 
-    genre_kpis.to_csv("/tmp/genre_kpis.csv", index=False)
-    hourly_kpis.to_csv("/tmp/hourly_kpis.csv", index=False)
+    genre_kpis.to_csv(TMP_GENRE_KPIS_PATH, index=False)
+    hourly_kpis.to_csv(TMP_HOURLY_KPIS_PATH, index=False)
 
 
-def validate_kpis(**context):
+def validate_kpis() -> bool:
     """Validate computed KPIs before loading to Redshift"""
     try:
-        genre_kpis = pd.read_csv("/tmp/genre_kpis.csv")
-        hourly_kpis = pd.read_csv("/tmp/hourly_kpis.csv")
+        genre_kpis = pd.read_csv(TMP_GENRE_KPIS_PATH)
+        hourly_kpis = pd.read_csv(TMP_HOURLY_KPIS_PATH)
 
         # Validate genre KPIs
         if genre_kpis.empty:
@@ -182,7 +237,7 @@ def validate_kpis(**context):
         raise
 
 
-def test_redshift_connection(**context):
+def test_redshift_connection() -> bool:
     """Test Redshift connection and cluster availability"""
     try:
         redshift_hook = RedshiftSQLHook(redshift_conn_id=REDSHIFT_CONN_ID)
@@ -228,12 +283,12 @@ def test_redshift_connection(**context):
         raise
 
 
-def upload_to_s3():
+def upload_to_s3() -> bool:
     """Upload KPI files to S3"""
     try:
         # Validate CSV files before upload
-        genre_kpis = pd.read_csv("/tmp/genre_kpis.csv")
-        hourly_kpis = pd.read_csv("/tmp/hourly_kpis.csv")
+        genre_kpis = pd.read_csv(TMP_GENRE_KPIS_PATH)
+        hourly_kpis = pd.read_csv(TMP_HOURLY_KPIS_PATH)
 
         # Convert numeric columns to appropriate types
         genre_kpis["listen_count"] = genre_kpis["listen_count"].astype("Int64")
@@ -250,16 +305,18 @@ def upload_to_s3():
         ].astype("float64")
 
         # Save with correct types
-        genre_kpis.to_csv("/tmp/genre_kpis.csv", index=False)
-        hourly_kpis.to_csv("/tmp/hourly_kpis.csv", index=False)
+        genre_kpis.to_csv(TMP_GENRE_KPIS_PATH, index=False)
+        hourly_kpis.to_csv(TMP_HOURLY_KPIS_PATH, index=False)
 
         s3_hook = S3Hook(aws_conn_id=S3_CONN_ID)
 
         # Upload files
-        for filename, key in [
-            ("/tmp/genre_kpis.csv", "genre_kpis.csv"),
-            ("/tmp/hourly_kpis.csv", "hourly_kpis.csv"),
-        ]:
+        files_to_upload = [
+            (TMP_GENRE_KPIS_PATH, f"{GENRE_KPIS_TABLE}.csv"),
+            (TMP_HOURLY_KPIS_PATH, f"{HOURLY_KPIS_TABLE}.csv"),
+        ]
+
+        for filename, key in files_to_upload:
             s3_hook.load_file(
                 filename=filename, key=key, bucket_name=S3_BUCKET, replace=True
             )
@@ -317,11 +374,11 @@ validate_kpis_task = PythonOperator(
 )
 
 load_genre_kpis_task = S3ToRedshiftOperator(
-    task_id="load_genre_kpis",
+    task_id=f"load_{GENRE_KPIS_TABLE}",
     schema="public",
-    table="genre_kpis",
+    table=GENRE_KPIS_TABLE,
     s3_bucket=S3_BUCKET,
-    s3_key="genre_kpis.csv",
+    s3_key=f"{GENRE_KPIS_TABLE}.csv",
     redshift_conn_id=REDSHIFT_CONN_ID,
     aws_conn_id=S3_CONN_ID,
     copy_options=COPY_OPTIONS,
@@ -332,11 +389,11 @@ load_genre_kpis_task = S3ToRedshiftOperator(
 )
 
 load_hourly_kpis_task = S3ToRedshiftOperator(
-    task_id="load_hourly_kpis",
+    task_id=f"load_{HOURLY_KPIS_TABLE}",
     schema="public",
-    table="hourly_kpis",
+    table=HOURLY_KPIS_TABLE,
     s3_bucket=S3_BUCKET,
-    s3_key="hourly_kpis.csv",
+    s3_key=f"{HOURLY_KPIS_TABLE}.csv",
     redshift_conn_id=REDSHIFT_CONN_ID,
     aws_conn_id=S3_CONN_ID,
     copy_options=COPY_OPTIONS,
