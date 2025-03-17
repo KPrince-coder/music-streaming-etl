@@ -16,6 +16,24 @@ The pipeline performs the following operations:
 4. Computes genre-based and hourly KPIs
 5. Loads processed data into Redshift for analytics
 
+## Data Validation
+
+The pipeline includes comprehensive data validation at multiple stages:
+
+1. Source data validation (RDS and S3)
+2. KPI computation validation
+3. Redshift data quality checks
+
+![Redshift Data Validation](docs/images/redshift_data_validation.png)
+
+The validation process ensures:
+
+- No NULL values in critical columns
+- Correct data types and ranges
+- Referential integrity
+- Expected record counts
+- Data freshness
+
 ## DAG Structure
 
 ![Airflow DAGs](docs/images/airflow_dags.png)
@@ -40,7 +58,7 @@ The main DAG (`music_streaming_etl_dags.py`) consists of the following tasks:
 
 ## Project Structure
 
-```
+```Markdown
 .
 ├── dags/
 │   ├── music_streaming_etl_dags.py
