@@ -178,8 +178,12 @@ def compute_kpis() -> None:
     merged_df = streaming_df.merge(songs_df, on="track_id", how="left")
     merged_df = merged_df.merge(users_df, on="user_id", how="left")
 
+    # Add date column for daily grouping
+    merged_df["date"] = merged_df["listen_time"].dt.date
+
+    # Group by both genre and date
     genre_kpis = (
-        merged_df.groupby("track_genre")
+        merged_df.groupby(["track_genre", "date"])
         .agg(
             listen_count=("track_id", "count"),
             avg_track_duration=("duration_ms", "mean"),
@@ -191,6 +195,7 @@ def compute_kpis() -> None:
         .reset_index()
     )
 
+    # Group by hour
     merged_df["hour"] = merged_df["listen_time"].dt.hour
     hourly_kpis = (
         merged_df.groupby("hour")
@@ -255,6 +260,7 @@ def test_redshift_connection() -> bool:
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS public.genre_kpis (
                 track_genre VARCHAR(255),
+                date DATE,
                 listen_count BIGINT,
                 avg_track_duration DOUBLE PRECISION,
                 most_popular_track VARCHAR(255)
