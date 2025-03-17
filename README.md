@@ -75,7 +75,6 @@ astro dev init
 ```
 
 3. Configure Airflow connections in `airflow_settings.yaml`:
-   
    - AWS S3 (`aws_s3_conn`)
    - RDS PostgreSQL (`rds_conn`)
    - Redshift (`redshift_conn`)
